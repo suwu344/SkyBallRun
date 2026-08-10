@@ -1,0 +1,21 @@
+; Engine configuration file.
+; It is usually edited with the Godot editor UI.
+
+config_version=5
+
+[application]
+
+config/name="Sky Ball Run - Roll Parkour Prototype"
+run/main_scene="res://scenes/main.tscn"
+config/features=PackedStringArray("4.7")
+
+[display]
+
+window/size/viewport_width=960
+window/size/viewport_height=600
+window/size/resizable=false
+
+[rendering]
+
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"
