@@ -85,6 +85,8 @@ func _build_ui() -> void:
 
 	_apply_theme()
 	_hide_all()
+	# Keep the main menu usable from keyboard immediately after launch.
+	main_start_button.focus_mode = Control.FOCUS_ALL
 
 func _create_panel(title_text: String, subtitle_text: String) -> PanelContainer:
 	var panel := PanelContainer.new()
