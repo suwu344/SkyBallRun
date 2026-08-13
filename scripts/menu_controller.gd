@@ -14,6 +14,7 @@ var menu_title: Label
 var status_label: Label
 var main_start_button: Button
 var design_root: Control
+var design_canvas: Control
 
 func setup(game_node: Node) -> void:
 	game = game_node
@@ -24,27 +25,26 @@ func _build_ui() -> void:
 	menu_layer = Control.new()
 	menu_layer.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	add_child(menu_layer)
-	design_root = Control.new()
-	design_root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	design_root.set_anchors_preset(Control.PRESET_CENTER)
-	design_root.offset_left = -480.0
-	design_root.offset_top = -300.0
-	design_root.offset_right = 480.0
-	design_root.offset_bottom = 300.0
-	design_root.scale = Vector2.ONE
-	design_root.resized.connect(_update_design_scale)
-	menu_layer.add_child(design_root)
-	get_viewport().size_changed.connect(_update_design_scale)
 	menu_backdrop = ColorRect.new()
 	menu_backdrop.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	menu_backdrop.color = Color(0.005, 0.012, 0.04, 0.72)
 	menu_backdrop.mouse_filter = Control.MOUSE_FILTER_STOP
-	design_root.add_child(menu_backdrop)
+	menu_layer.add_child(menu_backdrop)
+
+	design_root = Control.new()
+	design_root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	design_root.resized.connect(_update_design_scale)
+	menu_layer.add_child(design_root)
+	get_viewport().size_changed.connect(_update_design_scale)
+	design_canvas = Control.new()
+	design_canvas.size = Vector2(960.0, 600.0)
+	design_canvas.mouse_filter = Control.MOUSE_FILTER_PASS
+	design_root.add_child(design_canvas)
 
 	main_panel = _create_panel("SKY BALL RUN", "四关悬浮赛道 · 滚球跑酷原型")
 	main_panel.position = Vector2(260, 92)
 	main_panel.size = Vector2(440, 410)
-	design_root.add_child(main_panel)
+	design_canvas.add_child(main_panel)
 	var main_box := main_panel.get_child(0) as VBoxContainer
 	main_start_button = _add_button(main_box, "开始游戏", _on_start_pressed)
 	_add_button(main_box, "设置", _on_settings_pressed)
@@ -58,7 +58,7 @@ func _build_ui() -> void:
 	pause_panel = _create_panel("已暂停", "赛道已暂停，准备好后继续")
 	pause_panel.position = Vector2(300, 132)
 	pause_panel.size = Vector2(360, 330)
-	design_root.add_child(pause_panel)
+	design_canvas.add_child(pause_panel)
 	var pause_box := pause_panel.get_child(0) as VBoxContainer
 	_add_button(pause_box, "继续游戏", _on_resume_pressed)
 	_add_button(pause_box, "重新开始", _on_restart_pressed)
@@ -68,7 +68,7 @@ func _build_ui() -> void:
 	settings_panel = _create_panel("设置", "设置会自动保存到本机")
 	settings_panel.position = Vector2(220, 68)
 	settings_panel.size = Vector2(520, 465)
-	design_root.add_child(settings_panel)
+	design_canvas.add_child(settings_panel)
 	var settings_box := settings_panel.get_child(0) as VBoxContainer
 	var volume_label := Label.new()
 	volume_label.text = "主音量"
@@ -102,11 +102,13 @@ func _build_ui() -> void:
 	_update_design_scale()
 
 func _update_design_scale() -> void:
-	if design_root == null:
+	if design_root == null or design_canvas == null:
 		return
 	var viewport_size: Vector2 = get_viewport().get_visible_rect().size
 	var scale_factor: float = min(viewport_size.x / 960.0, viewport_size.y / 600.0)
-	design_root.scale = Vector2.ONE * max(0.75, scale_factor)
+	var final_scale: float = max(0.75, scale_factor)
+	design_canvas.scale = Vector2.ONE * final_scale
+	design_canvas.position = (viewport_size - design_canvas.size * final_scale) * 0.5
 
 func _create_panel(title_text: String, subtitle_text: String) -> PanelContainer:
 	var panel := PanelContainer.new()
