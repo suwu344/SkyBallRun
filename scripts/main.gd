@@ -78,6 +78,9 @@ var music_time := 0.0
 var music_lead_phase := 0.0
 var music_bass_phase := 0.0
 var music_mode := 0 # 0: gameplay, 1: game over, 2: finish
+var menu_controller: CanvasLayer
+var game_started := false
+var paused := false
 
 
 func _ready() -> void:
@@ -89,10 +92,15 @@ func _ready() -> void:
 	_apply_level_theme()
 	_setup_music()
 	_reset_game()
+	menu_controller = preload("res://scripts/menu_controller.gd").new()
+	add_child(menu_controller)
+	menu_controller.setup(self)
 
 
 func _process(delta: float) -> void:
 	_fill_music()
+	if not game_started or paused:
+		return
 	if level_banner_timer > 0.0:
 		level_banner_timer = max(0.0, level_banner_timer - delta)
 	if game_over or game_complete:
@@ -151,8 +159,17 @@ func _input(event: InputEvent) -> void:
 	if not key_event.pressed or key_event.echo:
 		return
 
-	if key_event.keycode == KEY_ESCAPE:
-		get_tree().quit()
+	if key_event.keycode == KEY_ESCAPE or key_event.keycode == KEY_P:
+		if game_started and not game_over and not game_complete:
+			if paused:
+				resume_game()
+			else:
+				pause_game()
+			get_viewport().set_input_as_handled()
+		return
+
+	if key_event.keycode == KEY_Q and not game_started:
+		quit_game()
 		get_viewport().set_input_as_handled()
 		return
 
@@ -161,7 +178,55 @@ func _input(event: InputEvent) -> void:
 	restart_pressed = restart_pressed or key_event.unicode == 32
 	if (game_over or game_complete) and restart_pressed:
 		get_viewport().set_input_as_handled()
-		_reset_game()
+		restart_from_menu()
+
+
+func start_new_game() -> void:
+	_reset_game()
+	game_started = true
+	paused = false
+	music_player.stream_paused = false
+
+
+func restart_from_menu() -> void:
+	start_new_game()
+	if menu_controller:
+		menu_controller.hide_menu()
+
+
+func pause_game() -> void:
+	if not game_started or game_over or game_complete:
+		return
+	paused = true
+	music_player.stream_paused = true
+	if menu_controller:
+		menu_controller.show_pause_menu()
+
+
+func resume_game() -> void:
+	if not game_started:
+		return
+	paused = false
+	music_player.stream_paused = false
+	if menu_controller:
+		menu_controller.hide_menu()
+
+
+func open_main_menu() -> void:
+	game_started = false
+	paused = false
+	_reset_game()
+	music_player.stream_paused = false
+	if menu_controller:
+		menu_controller.show_main_menu()
+
+
+func is_game_paused() -> bool:
+	return paused
+
+
+func quit_game() -> void:
+	get_tree().quit()
 
 
 func _setup_world() -> void:
@@ -550,6 +615,10 @@ func _fill_music() -> void:
 			return
 
 	var frame_count := music_playback.get_frames_available()
+	if not Settings.music_enabled:
+		for _silent_frame in range(frame_count):
+			music_playback.push_frame(Vector2.ZERO)
+		return
 	for _frame in range(frame_count):
 		var step_duration := MUSIC_STEP_DURATION
 		var lead_notes = MUSIC_LEAD
@@ -602,6 +671,7 @@ func _reset_game() -> void:
 	game_over = false
 	game_complete = false
 	failure_text = ""
+	paused = false
 	music_time = 0.0
 	music_lead_phase = 0.0
 	music_bass_phase = 0.0
