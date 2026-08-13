@@ -62,6 +62,7 @@ var fall_velocity := 0.0
 var fall_elapsed := 0.0
 var fall_camera_position := Vector3.ZERO
 var fall_camera_target := Vector3.ZERO
+var fall_start_y := 0.0
 var speed := CRUISE_SPEED
 var distance := 0.0
 var pickups_collected := 0
@@ -78,6 +79,19 @@ var music_time := 0.0
 var music_lead_phase := 0.0
 var music_bass_phase := 0.0
 var music_mode := 0 # 0: gameplay, 1: game over, 2: finish
+var menu_controller: CanvasLayer
+var game_started := false
+var paused := false
+var transition_active := false
+var transition_elapsed := 0.0
+var transition_duration := 3.8
+var transition_from_level := 1
+var transition_to_level := 1
+var transition_gate_root: Node3D
+var transition_overlay: ColorRect
+var transition_title: Label
+var transition_track_rebuilt := false
+var ui_root: Control
 
 
 func _ready() -> void:
@@ -89,10 +103,15 @@ func _ready() -> void:
 	_apply_level_theme()
 	_setup_music()
 	_reset_game()
+	menu_controller = preload("res://scripts/menu_controller.gd").new()
+	add_child(menu_controller)
+	menu_controller.setup(self)
 
 
 func _process(delta: float) -> void:
 	_fill_music()
+	if not game_started or paused:
+		return
 	if level_banner_timer > 0.0:
 		level_banner_timer = max(0.0, level_banner_timer - delta)
 	if game_over or game_complete:
@@ -128,6 +147,7 @@ func _process(delta: float) -> void:
 	player_ball.rotate_object_local(Vector3.FORWARD, -steer * 0.12)
 
 	_update_track(delta)
+	_update_level_transition(delta)
 	_update_obstacles(delta)
 	_update_pickups(delta)
 	_update_finish_line(delta)
@@ -151,8 +171,17 @@ func _input(event: InputEvent) -> void:
 	if not key_event.pressed or key_event.echo:
 		return
 
-	if key_event.keycode == KEY_ESCAPE:
-		get_tree().quit()
+	if key_event.keycode == KEY_ESCAPE or key_event.keycode == KEY_P:
+		if game_started and not game_over and not game_complete:
+			if paused:
+				resume_game()
+			else:
+				pause_game()
+			get_viewport().set_input_as_handled()
+		return
+
+	if key_event.keycode == KEY_Q and not game_started:
+		quit_game()
 		get_viewport().set_input_as_handled()
 		return
 
@@ -161,7 +190,55 @@ func _input(event: InputEvent) -> void:
 	restart_pressed = restart_pressed or key_event.unicode == 32
 	if (game_over or game_complete) and restart_pressed:
 		get_viewport().set_input_as_handled()
-		_reset_game()
+		restart_from_menu()
+
+
+func start_new_game() -> void:
+	_reset_game()
+	game_started = true
+	paused = false
+	music_player.stream_paused = false
+
+
+func restart_from_menu() -> void:
+	start_new_game()
+	if menu_controller:
+		menu_controller.hide_menu()
+
+
+func pause_game() -> void:
+	if not game_started or game_over or game_complete:
+		return
+	paused = true
+	music_player.stream_paused = true
+	if menu_controller:
+		menu_controller.show_pause_menu()
+
+
+func resume_game() -> void:
+	if not game_started:
+		return
+	paused = false
+	music_player.stream_paused = false
+	if menu_controller:
+		menu_controller.hide_menu()
+
+
+func open_main_menu() -> void:
+	game_started = false
+	paused = false
+	_reset_game()
+	music_player.stream_paused = false
+	if menu_controller:
+		menu_controller.show_main_menu()
+
+
+func is_game_paused() -> bool:
+	return paused
+
+
+func quit_game() -> void:
+	get_tree().quit()
 
 
 func _setup_world() -> void:
@@ -387,14 +464,83 @@ func _create_fourth_level_sky() -> Sky:
 
 
 func _start_level(next_level: int) -> void:
+	if transition_active or next_level == current_level:
+		return
+	transition_active = true
+	transition_elapsed = 0.0
+	transition_from_level = current_level
+	transition_to_level = next_level
+	transition_title.text = "第 %d 关" % next_level
 	current_level = next_level
 	level_two_active = current_level == 2
-	level_banner_timer = 2.8
-	_clear_runtime_nodes()
-	_rebuild_track()
+	level_banner_timer = transition_duration
+	# Keep the moving track and existing obstacles alive. The gate and overlay
+	# make the theme change read as a continuous checkpoint instead of a reset.
 	_apply_level_theme()
-	spawn_timer = 0.65
+	_spawn_transition_gate()
+	transition_track_rebuilt = false
+	_set_transition_overlay(0.0)
+	spawn_timer = 0.9
 	_update_ui()
+
+
+func _spawn_transition_gate() -> void:
+	if is_instance_valid(transition_gate_root):
+		transition_gate_root.queue_free()
+	transition_gate_root = Node3D.new()
+	transition_gate_root.name = "LevelTransitionGate"
+	transition_gate_root.position = Vector3(0.0, 0.0, -78.0)
+	add_child(transition_gate_root)
+	var gate_color := _theme_color("block")
+	var trim_color := _theme_color("marker")
+	for side in [-1, 1]:
+		var post := _create_box(Vector3(0.48, 4.6, 0.5), gate_color, 0.35)
+		post.position = Vector3(float(side) * 3.55, 2.3, 0.0)
+		transition_gate_root.add_child(post)
+		var trim := _create_box(Vector3(0.58, 0.18, 0.58), trim_color, 0.3)
+		trim.position = Vector3(float(side) * 3.55, 3.0, 0.0)
+		transition_gate_root.add_child(trim)
+	var top := _create_box(Vector3(7.6, 0.58, 0.5), gate_color, 0.35)
+	top.position = Vector3(0.0, 4.35, 0.0)
+	transition_gate_root.add_child(top)
+	var label := Label3D.new()
+	label.text = "LEVEL %d" % transition_to_level
+	label.font_size = 100
+	label.outline_size = 12
+	label.modulate = Color("f5ffff")
+	label.position = Vector3(0.0, 4.35, 0.28)
+	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	label.pixel_size = 0.007
+	transition_gate_root.add_child(label)
+
+
+func _update_level_transition(delta: float) -> void:
+	if not transition_active:
+		return
+	transition_elapsed += delta
+	if is_instance_valid(transition_gate_root):
+		transition_gate_root.position.z += speed * delta
+	var phase: float = clamp(transition_elapsed / transition_duration, 0.0, 1.0)
+	var pulse: float = sin(phase * PI)
+	_set_transition_overlay(pulse * 0.54)
+	if phase >= 0.72 and not transition_track_rebuilt:
+		# Rebuild under the darkened midpoint of the transition so the new
+		# palette is revealed as part of the gate passage, not a hard cut.
+		_rebuild_track()
+		transition_track_rebuilt = true
+	if transition_elapsed >= transition_duration:
+		transition_active = false
+		_set_transition_overlay(0.0)
+		if is_instance_valid(transition_gate_root):
+			transition_gate_root.queue_free()
+			transition_gate_root = null
+
+
+func _set_transition_overlay(alpha: float) -> void:
+	if transition_overlay == null:
+		return
+	transition_overlay.color = Color(0.015, 0.025, 0.07, alpha)
+	transition_title.modulate.a = clamp(alpha * 2.2, 0.0, 1.0)
 
 
 func _rebuild_track() -> void:
@@ -492,42 +638,72 @@ func _setup_finish_line() -> void:
 func _setup_ui() -> void:
 	var layer := CanvasLayer.new()
 	add_child(layer)
+	ui_root = Control.new()
+	ui_root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	layer.add_child(ui_root)
 
 	hud_label = Label.new()
-	hud_label.position = Vector2(20.0, 16.0)
-	hud_label.size = Vector2(920.0, 42.0)
+	hud_label.set_anchors_preset(Control.PRESET_TOP_WIDE)
+	hud_label.offset_left = 20.0
+	hud_label.offset_top = 16.0
+	hud_label.offset_right = -20.0
+	hud_label.offset_bottom = 58.0
 	hud_label.add_theme_font_size_override("font_size", 23)
 	hud_label.add_theme_color_override("font_color", Color("f5ffff"))
 	hud_label.add_theme_color_override("font_shadow_color", Color("1b2071"))
 	hud_label.add_theme_constant_override("shadow_offset_x", 1)
 	hud_label.add_theme_constant_override("shadow_offset_y", 2)
-	layer.add_child(hud_label)
+	ui_root.add_child(hud_label)
 
 	hint_label = Label.new()
-	hint_label.position = Vector2(0.0, 557.0)
-	hint_label.size = Vector2(960.0, 28.0)
+	hint_label.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
+	hint_label.offset_left = 20.0
+	hint_label.offset_top = -43.0
+	hint_label.offset_right = -20.0
+	hint_label.offset_bottom = -14.0
 	hint_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	hint_label.add_theme_font_size_override("font_size", 17)
 	hint_label.add_theme_color_override("font_color", Color("f5ffff"))
-	layer.add_child(hint_label)
+	ui_root.add_child(hint_label)
 
 	game_over_panel = ColorRect.new()
-	game_over_panel.position = Vector2.ZERO
-	game_over_panel.size = Vector2(960.0, 600.0)
+	game_over_panel.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	game_over_panel.color = Color(0.02, 0.03, 0.08, 0.0)
 	game_over_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	layer.add_child(game_over_panel)
+	ui_root.add_child(game_over_panel)
 
 	center_label = Label.new()
-	center_label.position = Vector2(0.0, 205.0)
-	center_label.size = Vector2(960.0, 170.0)
+	center_label.set_anchors_preset(Control.PRESET_CENTER)
+	center_label.offset_left = -480.0
+	center_label.offset_top = -85.0
+	center_label.offset_right = 480.0
+	center_label.offset_bottom = 85.0
 	center_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	center_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	center_label.add_theme_font_size_override("font_size", 34)
 	center_label.add_theme_color_override("font_color", Color("f5ffff"))
 	center_label.add_theme_color_override("font_outline_color", Color("1b2071"))
 	center_label.add_theme_constant_override("outline_size", 7)
-	layer.add_child(center_label)
+	ui_root.add_child(center_label)
+	transition_overlay = ColorRect.new()
+	transition_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	transition_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ui_root.add_child(transition_overlay)
+	transition_title = Label.new()
+	transition_title.set_anchors_preset(Control.PRESET_CENTER)
+	transition_title.offset_left = -300.0
+	transition_title.offset_top = -46.0
+	transition_title.offset_right = 300.0
+	transition_title.offset_bottom = 46.0
+	transition_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	transition_title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	transition_title.add_theme_font_size_override("font_size", 46)
+	transition_title.add_theme_color_override("font_color", Color("f5ffff"))
+	transition_title.add_theme_color_override("font_outline_color", Color("1b2071"))
+	transition_title.add_theme_constant_override("outline_size", 8)
+	transition_title.text = "第 %d 关" % transition_to_level
+	transition_title.modulate.a = 0.0
+	ui_root.add_child(transition_title)
 
 
 func _setup_music() -> void:
@@ -550,6 +726,10 @@ func _fill_music() -> void:
 			return
 
 	var frame_count := music_playback.get_frames_available()
+	if not Settings.music_enabled:
+		for _silent_frame in range(frame_count):
+			music_playback.push_frame(Vector2.ZERO)
+		return
 	for _frame in range(frame_count):
 		var step_duration := MUSIC_STEP_DURATION
 		var lead_notes = MUSIC_LEAD
@@ -592,6 +772,7 @@ func _reset_game() -> void:
 	player_y = PLAYER_RADIUS + 0.02
 	fall_velocity = 0.0
 	fall_elapsed = 0.0
+	fall_start_y = player_y
 	falling = false
 	player_root.position = Vector3(player_x, player_y, PLAYER_Z)
 	player_ball.rotation = Vector3.ZERO
@@ -602,6 +783,7 @@ func _reset_game() -> void:
 	game_over = false
 	game_complete = false
 	failure_text = ""
+	paused = false
 	music_time = 0.0
 	music_lead_phase = 0.0
 	music_bass_phase = 0.0
@@ -644,9 +826,14 @@ func _update_fall(delta: float) -> void:
 	player_y += fall_velocity * delta
 	player_root.position = Vector3(player_x, player_y, PLAYER_Z)
 	player_ball.rotate_object_local(Vector3.RIGHT, speed * delta / PLAYER_RADIUS)
-	# Keep the forward-facing view fixed while the ball drops out of frame.
-	camera.position = fall_camera_position
-	camera.look_at(fall_camera_target, Vector3.UP)
+	# The first second preserves the familiar runway composition. After that
+	# the camera eases downward with the ball while keeping the forward axis.
+	var follow_phase: float = clamp((fall_elapsed - 0.8) / 1.7, 0.0, 1.0)
+	var eased_follow: float = follow_phase * follow_phase * (3.0 - 2.0 * follow_phase)
+	var target_camera_y: float = fall_camera_position.y + (player_y - fall_start_y) * 0.58
+	var target_look_y: float = fall_camera_target.y + (player_y - fall_start_y) * 0.34
+	camera.position = fall_camera_position.lerp(Vector3(fall_camera_position.x, target_camera_y, fall_camera_position.z), eased_follow)
+	camera.look_at(fall_camera_target.lerp(Vector3(fall_camera_target.x, target_look_y, fall_camera_target.z), eased_follow), Vector3.UP)
 	if fall_elapsed >= FALL_DURATION:
 		_end_game("掉出悬浮赛道！")
 
